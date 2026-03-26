@@ -49,6 +49,7 @@ build_simpleitk() {
         -DITK_GIT_REPOSITORY:STRING="https://github.com/InsightSoftwareConsortium/ITK.git" \
         -DITK_C_OPTIMIZATION_FLAGS:STRING="" \
         -DITK_CXX_OPTIMIZATION_FLAGS:STRING="" \
+        -DSimpleITK_USE_ELASTIX:BOOL=${SIMPLEITK_USE_ELASTIX:-OFF} \
         ${SRC_DIR}/SuperBuild &&
     make  &&
     find ./ -name \*.o -delete

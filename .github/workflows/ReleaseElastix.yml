@@ -1,0 +1,195 @@
+name: Release Elastix Wheels
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+concurrency:
+  group: '${{ github.workflow }}@${{ github.sha }}'
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux-x86_64:
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Clean workspace
+        run: git clean -fdx
+
+      - name: Build Docker Image
+        working-directory: Utilities/Distribution/manylinux
+        run: |
+          docker build --pull=true --rm=true -t simpleitk_manylinux -f Dockerfile-2014-x86_64 .
+
+      - name: Build Elastix Wheels
+        env:
+          PYTHON_VERSIONS: "cp310-cp310"
+          BUILD_CSHARP: 0
+          BUILD_JAVA: 0
+          BUILD_PYTHON_LIMITED_API: 1
+          SIMPLEITK_USE_ELASTIX: "ON"
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env PYTHON_VERSIONS \
+            --env BUILD_CSHARP \
+            --env BUILD_JAVA \
+            --env BUILD_PYTHON_LIMITED_API \
+            --env SIMPLEITK_USE_ELASTIX \
+            --env SIMPLEITK_SRC_DIR="/work/src" \
+            -v "${{ github.workspace }}:/work/src" \
+            -v "${{ github.workspace }}/Utilities/Distribution/manylinux:/work/io" \
+            -t simpleitk_manylinux
+
+      - name: List Outputs
+        run: |
+          find "${{ github.workspace }}/Utilities/Distribution/manylinux" -name "*.whl" -o -name "*.log" | head -50
+
+      - name: Smoke Test Elastix
+        run: |
+          python3 -m venv /tmp/sitk-test-venv
+          . /tmp/sitk-test-venv/bin/activate
+          WHL=$(find "${{ github.workspace }}/Utilities/Distribution/manylinux/wheelhouse" -name "*.whl" | head -1)
+          pip install "$WHL"
+          python -c "import SimpleITK as sitk; f = sitk.ElastixImageFilter(); print('Elastix OK')"
+          deactivate
+          rm -rf /tmp/sitk-test-venv
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64-wheels
+          path: |
+            ${{ github.workspace }}/Utilities/Distribution/manylinux/wheelhouse/*.whl
+
+  build-windows:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 360
+    env:
+      BLD_DIR: "${{ github.workspace }}\\bld"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Clean workspace
+        shell: bash
+        run: git clean -fdx
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64
+
+      - name: SuperBuild with Elastix
+        shell: bash
+        run: |
+          cmake -G "Visual Studio 17 2022" -A x64 \
+            -DSimpleITK_BUILD_DISTRIBUTE:BOOL=ON \
+            -DBUILD_TESTING:BOOL=OFF \
+            -DBUILD_EXAMPLES:BOOL=OFF \
+            -DBUILD_SHARED_LIBS:BOOL=OFF \
+            -DWRAP_DEFAULT:BOOL=OFF \
+            -DSimpleITK_USE_ELASTIX:BOOL=ON \
+            -DITK_C_OPTIMIZATION_FLAGS:STRING="" \
+            -DITK_CXX_OPTIMIZATION_FLAGS:STRING="" \
+            -S "$GITHUB_WORKSPACE/SuperBuild" \
+            -B "$BLD_DIR"
+          cmake --build "$BLD_DIR" --config Release
+
+      # --- Limited API wheel (covers Python 3.11, 3.12, 3.13) ---
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build cp311-abi3 Wheel
+        shell: bash
+        run: |
+          "$GITHUB_WORKSPACE/.github/scripts/win_build_wheel.sh" \
+            "$BLD_DIR" "$GITHUB_WORKSPACE" "py311-abi3" "ON"
+
+      # --- Python 3.10 wheel ---
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Build cp310 Wheel
+        shell: bash
+        run: |
+          "$GITHUB_WORKSPACE/.github/scripts/win_build_wheel.sh" \
+            "$BLD_DIR" "$GITHUB_WORKSPACE" "py310" "OFF"
+
+      - name: Collect Wheels
+        shell: bash
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
+          find "$GITHUB_WORKSPACE/py311-abi3" "$GITHUB_WORKSPACE/py310" \
+            -iname "simpleitk*.whl" -exec cp -v {} "$GITHUB_WORKSPACE/artifacts/" \;
+
+      - name: Smoke Test Elastix
+        shell: bash
+        run: |
+          python -m venv "$GITHUB_WORKSPACE/test-venv"
+          source "$GITHUB_WORKSPACE/test-venv/Scripts/activate"
+          WHL=$(find "$GITHUB_WORKSPACE/artifacts" -name "*.whl" | head -1)
+          pip install "$WHL"
+          python -c "import SimpleITK as sitk; f = sitk.ElastixImageFilter(); print('Elastix OK')"
+          deactivate
+          rm -rf "$GITHUB_WORKSPACE/test-venv"
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64-wheels
+          path: ${{ github.workspace }}/artifacts/*.whl
+
+  publish:
+    needs: [build-linux-x86_64, build-windows]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        id: download
+        with:
+          path: ${{ github.workspace }}/artifacts
+
+      - name: Checksums
+        shell: bash
+        run: |
+          find ${{ steps.download.outputs.download-path }} -type f -name "*.whl" \
+            | xargs sha256sum | tee checksums.txt
+
+      - name: Upload Wheels to Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          echo "Uploading wheels to release: $TAG"
+          gh release upload "$TAG" \
+            $( find ${{ steps.download.outputs.download-path }} -type f -name "*.whl" ) \
+            checksums.txt \
+            --clobber
+
+      - name: Cleanup Old Releases (keep latest 20)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release list --limit 100 --json tagName,createdAt \
+            --jq 'sort_by(.createdAt) | reverse | .[20:] | .[].tagName' | \
+          while read -r tag; do
+            echo "Deleting old release: $tag"
+            gh release delete "$tag" --yes || true
+          done
