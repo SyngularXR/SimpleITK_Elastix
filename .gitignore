@@ -15,3 +15,4 @@ venv*
 # CLion temporary files, and default build paths
 .idea/
 cmake-build*
+.context/codex-session-id
