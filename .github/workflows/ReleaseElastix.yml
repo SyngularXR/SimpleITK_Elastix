@@ -54,13 +54,10 @@ jobs:
 
       - name: Smoke Test Elastix
         run: |
-          python3 -m venv /tmp/sitk-test-venv
-          . /tmp/sitk-test-venv/bin/activate
           WHL=$(find "${{ github.workspace }}/Utilities/Distribution/manylinux/wheelhouse" -name "*.whl" | head -1)
-          pip install "$WHL"
-          python -c "import SimpleITK as sitk; f = sitk.ElastixImageFilter(); print('Elastix OK')"
-          deactivate
-          rm -rf /tmp/sitk-test-venv
+          pip install --user "$WHL"
+          python3 -c "import SimpleITK as sitk; f = sitk.ElastixImageFilter(); print('Elastix OK')"
+          pip uninstall -y simpleitk
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
@@ -74,7 +71,7 @@ jobs:
     timeout-minutes: 360
     defaults:
       run:
-        shell: pwsh
+        shell: cmd
     env:
       BLD_DIR: "${{ github.workspace }}\\bld"
     steps:
@@ -83,10 +80,7 @@ jobs:
           fetch-depth: 0
 
       - name: Clean workspace
-        run: |
-          if (Get-Command git -ErrorAction SilentlyContinue) {
-            git clean -fdx
-          }
+        run: git clean -fdx
 
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
@@ -98,18 +92,18 @@ jobs:
 
       - name: SuperBuild with Elastix
         run: |
-          cmake -G "Visual Studio 17 2022" -A x64 `
-            -DSimpleITK_BUILD_DISTRIBUTE:BOOL=ON `
-            -DBUILD_TESTING:BOOL=OFF `
-            -DBUILD_EXAMPLES:BOOL=OFF `
-            -DBUILD_SHARED_LIBS:BOOL=OFF `
-            -DWRAP_DEFAULT:BOOL=OFF `
-            -DSimpleITK_USE_ELASTIX:BOOL=ON `
-            -DITK_C_OPTIMIZATION_FLAGS:STRING="" `
-            -DITK_CXX_OPTIMIZATION_FLAGS:STRING="" `
-            -S "$env:GITHUB_WORKSPACE\SuperBuild" `
-            -B "$env:BLD_DIR"
-          cmake --build "$env:BLD_DIR" --config Release
+          cmake -G "Visual Studio 17 2022" -A x64 ^
+            -DSimpleITK_BUILD_DISTRIBUTE:BOOL=ON ^
+            -DBUILD_TESTING:BOOL=OFF ^
+            -DBUILD_EXAMPLES:BOOL=OFF ^
+            -DBUILD_SHARED_LIBS:BOOL=OFF ^
+            -DWRAP_DEFAULT:BOOL=OFF ^
+            -DSimpleITK_USE_ELASTIX:BOOL=ON ^
+            -DITK_C_OPTIMIZATION_FLAGS:STRING="" ^
+            -DITK_CXX_OPTIMIZATION_FLAGS:STRING="" ^
+            -S "%GITHUB_WORKSPACE%\SuperBuild" ^
+            -B "%BLD_DIR%"
+          cmake --build "%BLD_DIR%" --config Release
 
       # --- Limited API wheel (covers Python 3.11, 3.12, 3.13) ---
       - name: Set up Python 3.11
@@ -119,26 +113,23 @@ jobs:
 
       - name: Build cp311-abi3 Wheel
         run: |
-          $SRC = "$env:GITHUB_WORKSPACE"
-          $BLD = "$env:BLD_DIR"
-          $BUILD_DIR = "$SRC\py311-abi3"
-          $PYTHON_EXE = (python -c "import sys; print(sys.executable)")
-          $VENV_PYTHON = "$BLD\venv\Scripts\python.exe"
-          if (-not (Test-Path $VENV_PYTHON)) { $VENV_PYTHON = $PYTHON_EXE }
-          cmake -G Ninja `
-            -DCMAKE_PREFIX_PATH:PATH="$BLD" `
-            -DCMAKE_BUILD_TYPE:STRING=Release `
-            -DSWIG_EXECUTABLE:FILEPATH="$BLD\swigwin\swig.exe" `
-            -DSWIG_DIR:PATH="$BLD\swigwin" `
-            -DSimpleITK_PYTHON_USE_LIMITED_API:BOOL=ON `
-            -DSimpleITK_BUILD_DISTRIBUTE:BOOL=ON `
-            -DSimpleITK_PYTHON_WHEEL:BOOL=ON `
-            -DSimpleITK_Python_EXECUTABLE:FILEPATH="$VENV_PYTHON" `
-            -DPython_EXECUTABLE:FILEPATH="$PYTHON_EXE" `
-            -S "$SRC\Wrapping\Python" `
-            -B "$BUILD_DIR"
-          cmake --build "$BUILD_DIR" --config Release
-          cmake --build "$BUILD_DIR" --config Release --target dist
+          for /f "delims=" %%i in ('python -c "import sys; print(sys.executable)"') do set PYTHON_EXE=%%i
+          set VENV_PYTHON=%BLD_DIR%\venv\Scripts\python.exe
+          if not exist "%VENV_PYTHON%" set VENV_PYTHON=%PYTHON_EXE%
+          cmake -G Ninja ^
+            -DCMAKE_PREFIX_PATH:PATH="%BLD_DIR%" ^
+            -DCMAKE_BUILD_TYPE:STRING=Release ^
+            -DSWIG_EXECUTABLE:FILEPATH="%BLD_DIR%\swigwin\swig.exe" ^
+            -DSWIG_DIR:PATH="%BLD_DIR%\swigwin" ^
+            -DSimpleITK_PYTHON_USE_LIMITED_API:BOOL=ON ^
+            -DSimpleITK_BUILD_DISTRIBUTE:BOOL=ON ^
+            -DSimpleITK_PYTHON_WHEEL:BOOL=ON ^
+            -DSimpleITK_Python_EXECUTABLE:FILEPATH="%VENV_PYTHON%" ^
+            -DPython_EXECUTABLE:FILEPATH="%PYTHON_EXE%" ^
+            -S "%GITHUB_WORKSPACE%\Wrapping\Python" ^
+            -B "%GITHUB_WORKSPACE%\py311-abi3"
+          cmake --build "%GITHUB_WORKSPACE%\py311-abi3" --config Release
+          cmake --build "%GITHUB_WORKSPACE%\py311-abi3" --config Release --target dist
 
       # --- Python 3.10 wheel ---
       - name: Set up Python 3.10
@@ -148,42 +139,36 @@ jobs:
 
       - name: Build cp310 Wheel
         run: |
-          $SRC = "$env:GITHUB_WORKSPACE"
-          $BLD = "$env:BLD_DIR"
-          $BUILD_DIR = "$SRC\py310"
-          $PYTHON_EXE = (python -c "import sys; print(sys.executable)")
-          $VENV_PYTHON = "$BLD\venv\Scripts\python.exe"
-          if (-not (Test-Path $VENV_PYTHON)) { $VENV_PYTHON = $PYTHON_EXE }
-          cmake -G Ninja `
-            -DCMAKE_PREFIX_PATH:PATH="$BLD" `
-            -DCMAKE_BUILD_TYPE:STRING=Release `
-            -DSWIG_EXECUTABLE:FILEPATH="$BLD\swigwin\swig.exe" `
-            -DSWIG_DIR:PATH="$BLD\swigwin" `
-            -DSimpleITK_PYTHON_USE_LIMITED_API:BOOL=OFF `
-            -DSimpleITK_BUILD_DISTRIBUTE:BOOL=ON `
-            -DSimpleITK_PYTHON_WHEEL:BOOL=ON `
-            -DSimpleITK_Python_EXECUTABLE:FILEPATH="$VENV_PYTHON" `
-            -DPython_EXECUTABLE:FILEPATH="$PYTHON_EXE" `
-            -S "$SRC\Wrapping\Python" `
-            -B "$BUILD_DIR"
-          cmake --build "$BUILD_DIR" --config Release
-          cmake --build "$BUILD_DIR" --config Release --target dist
+          for /f "delims=" %%i in ('python -c "import sys; print(sys.executable)"') do set PYTHON_EXE=%%i
+          set VENV_PYTHON=%BLD_DIR%\venv\Scripts\python.exe
+          if not exist "%VENV_PYTHON%" set VENV_PYTHON=%PYTHON_EXE%
+          cmake -G Ninja ^
+            -DCMAKE_PREFIX_PATH:PATH="%BLD_DIR%" ^
+            -DCMAKE_BUILD_TYPE:STRING=Release ^
+            -DSWIG_EXECUTABLE:FILEPATH="%BLD_DIR%\swigwin\swig.exe" ^
+            -DSWIG_DIR:PATH="%BLD_DIR%\swigwin" ^
+            -DSimpleITK_PYTHON_USE_LIMITED_API:BOOL=OFF ^
+            -DSimpleITK_BUILD_DISTRIBUTE:BOOL=ON ^
+            -DSimpleITK_PYTHON_WHEEL:BOOL=ON ^
+            -DSimpleITK_Python_EXECUTABLE:FILEPATH="%VENV_PYTHON%" ^
+            -DPython_EXECUTABLE:FILEPATH="%PYTHON_EXE%" ^
+            -S "%GITHUB_WORKSPACE%\Wrapping\Python" ^
+            -B "%GITHUB_WORKSPACE%\py310"
+          cmake --build "%GITHUB_WORKSPACE%\py310" --config Release
+          cmake --build "%GITHUB_WORKSPACE%\py310" --config Release --target dist
 
       - name: Collect Wheels
         run: |
-          New-Item -ItemType Directory -Force -Path "$env:GITHUB_WORKSPACE\artifacts"
-          Get-ChildItem -Path "$env:GITHUB_WORKSPACE\py311-abi3","$env:GITHUB_WORKSPACE\py310" -Recurse -Filter "simpleitk*.whl" |
-            Copy-Item -Destination "$env:GITHUB_WORKSPACE\artifacts\"
+          mkdir "%GITHUB_WORKSPACE%\artifacts" 2>nul
+          for /r "%GITHUB_WORKSPACE%\py311-abi3" %%f in (SimpleITK*.whl) do copy "%%f" "%GITHUB_WORKSPACE%\artifacts\"
+          for /r "%GITHUB_WORKSPACE%\py310" %%f in (SimpleITK*.whl) do copy "%%f" "%GITHUB_WORKSPACE%\artifacts\"
 
       - name: Smoke Test Elastix
         run: |
-          python -m venv "$env:GITHUB_WORKSPACE\test-venv"
-          & "$env:GITHUB_WORKSPACE\test-venv\Scripts\Activate.ps1"
-          $whl = (Get-ChildItem "$env:GITHUB_WORKSPACE\artifacts" -Filter "*.whl" | Select-Object -First 1).FullName
-          pip install $whl
+          for %%f in ("%GITHUB_WORKSPACE%\artifacts\*.whl") do set WHL=%%f
+          pip install --user "%WHL%"
           python -c "import SimpleITK as sitk; f = sitk.ElastixImageFilter(); print('Elastix OK')"
-          deactivate
-          Remove-Item -Recurse -Force "$env:GITHUB_WORKSPACE\test-venv"
+          pip uninstall -y simpleitk
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
